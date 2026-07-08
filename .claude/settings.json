@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell.exe -Command \"php 'C:\\\\Users\\\\NUGRO~1.FAJ\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--xampp-htdocs-ai-kitab\\\\1b76bd3f-a0a3-45fd-b253-0a548f275d81\\\\scratchpad\\\\make_test_pdf2.php'\" *)",
+      "Bash(\"/c/xampp/mysql/bin/mysql.exe\" -u root kitabai -e \"SELECT par.id,p.page_number,p.extraction_method,par.status FROM paragraphs par JOIN pages p ON p.id=par.page_id WHERE par.harakat_text LIKE '%ادفع%' OR par.harakat_text LIKE '%الودودين%';\")",
+      "Bash(powershell.exe -Command \"php 'C:\\\\Users\\\\NUGRO~1.FAJ\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--xampp-htdocs-ai-kitab\\\\1b76bd3f-a0a3-45fd-b253-0a548f275d81\\\\scratchpad\\\\make_test_pdf.php'\" *)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\NUGRO~1.FAJ\\AppData\\Local\\Temp\\claude\\c--xampp-htdocs-ai-kitab\\1b76bd3f-a0a3-45fd-b253-0a548f275d81\\scratchpad"
+    ]
+  }
+}
