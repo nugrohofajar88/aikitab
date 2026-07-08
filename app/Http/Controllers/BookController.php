@@ -192,21 +192,29 @@ class BookController extends Controller
         }
 
         try {
-            $remoteId = $sync->publishBook($book);
+            $sync->publishBook($book);
 
-            $book->update([
-                'remote_book_id' => $remoteId,
-                'published_at' => now(),
-            ]);
+            $book->update(['published_at' => now()]);
         } catch (Throwable $e) {
             return back()->withErrors(['publish' => 'Gagal publikasikan: '.$e->getMessage()]);
         }
 
-        return back()->with('status', 'Kitab berhasil dipublikasikan ke situs publik.');
+        return back()->with('status', 'Kitab dikirim untuk dipublikasikan — akan tampil di situs publik dalam beberapa menit.');
     }
 
-    public function destroy(Book $book): RedirectResponse
+    public function destroy(Book $book, HostedSyncService $sync): RedirectResponse
     {
+        // If this book came from a hosted "minta kitab" request and never got
+        // published, tell hosted to stop showing it as "sedang diproses" —
+        // best-effort: a sync hiccup shouldn't block deleting the local book.
+        if ($book->remote_request_uuid && ! $book->published_at) {
+            try {
+                $sync->rejectRequest($book->remote_request_uuid);
+            } catch (Throwable $e) {
+                // Swallow it — the user can still delete locally either way.
+            }
+        }
+
         Storage::disk('local')->delete($book->file_path);
         $book->delete();
 

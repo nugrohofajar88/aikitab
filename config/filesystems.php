@@ -60,6 +60,21 @@ return [
             'report' => false,
         ],
 
+        // FTPS to the hosted app's server — used to push large book-export
+        // JSON files there directly (bypassing the HTTP body-size issue that
+        // hit publishing via a single big JSON POST). See HostedSyncService.
+        'hosted_ftp' => [
+            'driver' => 'ftp',
+            'host' => env('HOSTED_FTP_HOST'),
+            'username' => env('HOSTED_FTP_USERNAME'),
+            'password' => env('HOSTED_FTP_PASSWORD'),
+            'port' => (int) env('HOSTED_FTP_PORT', 21),
+            'root' => env('HOSTED_FTP_ROOT'),
+            'passive' => true,
+            'ssl' => true,
+            'timeout' => 30,
+        ],
+
     ],
 
     /*

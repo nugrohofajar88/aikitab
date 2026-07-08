@@ -37,7 +37,9 @@ return [
 
     'gemini' => [
         'key' => env('GEMINI_API_KEY'),
+        'extra_keys' => env('GEMINI_API_KEYS_EXTRA'),
         'model' => env('GEMINI_MODEL', 'gemini-2.5-flash'),
+        'model_priority' => env('GEMINI_MODEL_PRIORITY'),
     ],
 
     'openrouter' => [
@@ -53,6 +55,10 @@ return [
     'hosted' => [
         'url' => env('HOSTED_API_URL'),
         'token' => env('HOSTED_SYNC_TOKEN'),
+    ],
+
+    'ghostscript' => [
+        'binary' => env('GHOSTSCRIPT_BINARY', 'gs'),
     ],
 
 ];

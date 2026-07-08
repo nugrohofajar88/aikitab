@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Book;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 
 /**
@@ -47,6 +48,21 @@ class HostedSyncService
         }
     }
 
+    /**
+     * Tells the hosted app to give up on a request it thinks is still
+     * "claimed"/in-progress — call this when the locally-imported book for
+     * it gets deleted (e.g. processing failed) instead of leaving the
+     * visitor's status page stuck on "sedang diproses" forever.
+     */
+    public function rejectRequest(string $remoteRequestUuid): void
+    {
+        $response = $this->client()->post("{$this->baseUrl}/api/sync/requests/by-uuid/{$remoteRequestUuid}/reject");
+
+        if (! $response->successful()) {
+            throw new RuntimeException('Gagal menandai permintaan sebagai ditolak: '.$response->body());
+        }
+    }
+
     public function downloadRequestPdf(int $remoteRequestId): string
     {
         $response = $this->client()->get("{$this->baseUrl}/api/sync/requests/{$remoteRequestId}/download");
@@ -59,11 +75,23 @@ class HostedSyncService
     }
 
     /**
-     * Sends the complete finished content of a book to the hosted instance
-     * (full replace on their end — see BookSyncController::store). Only
-     * successfully-processed ("done") paragraphs are sent.
+     * Publishes a book's complete finished content to the hosted instance.
+     *
+     * Rather than POSTing the whole book (which can be several MB of JSON for
+     * a long kitab — every paragraph's harakat text, translation, and
+     * per-word grammar) as one HTTP body, the export is written to a file and
+     * pushed to the hosted server directly over FTPS (`hosted_ftp` disk),
+     * then a small API call just signals "a file is ready to import". This
+     * exists because a large single JSON POST was intermittently failing
+     * with "fwrite(): Unable to create temporary file" — Guzzle/PHP spill
+     * large request bodies to a temp file once they exceed an in-memory
+     * threshold, and that was failing under some (never fully pinned down)
+     * conditions. The hosted app's `books:process-imports` command (cron)
+     * picks up the file asynchronously — this method does not wait for the
+     * import to actually finish, only for the signal to be accepted, so the
+     * hosted `Book` may not exist yet the instant this returns.
      */
-    public function publishBook(Book $book): int
+    public function publishBook(Book $book): void
     {
         $book->loadMissing('pages.paragraphs');
 
@@ -98,13 +126,19 @@ class HostedSyncService
             'pages' => $pages,
         ];
 
-        $response = $this->client()->post("{$this->baseUrl}/api/sync/books", $payload);
+        $filename = "book-{$book->id}-".now()->timestamp.'.json';
+
+        Storage::disk('hosted_ftp')->put($filename, json_encode($payload));
+
+        $response = $this->client()->post("{$this->baseUrl}/api/sync/books/import-signal", [
+            'source_local_id' => $book->id,
+            'filename' => $filename,
+            'request_uuid' => $book->remote_request_uuid,
+        ]);
 
         if (! $response->successful()) {
-            throw new RuntimeException('Gagal publikasikan kitab: '.$response->body());
+            throw new RuntimeException('Gagal mengirim sinyal impor: '.$response->body());
         }
-
-        return (int) $response->json('book_id');
     }
 
     protected function client()

@@ -2,20 +2,125 @@
 
 namespace App\Services;
 
+use App\Models\GoogleApiKey;
 use App\Services\Contracts\AiProvider;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
+use Throwable;
 
 class GeminiService implements AiProvider
 {
-    protected string $apiKey;
+    /**
+     * Google's stated free-tier daily limit per (key, model) pair, as seen in
+     * the 429 RESOURCE_EXHAUSTED quota error body (quotaValue). Differs per
+     * model — Flash Lite variants have been observed with much higher daily
+     * caps than the base Flash model. Only used for the "X/Y today" badge and
+     * has no bearing on request behavior; Google's side is what actually
+     * rejects requests once a real limit is hit.
+     */
+    public const MODEL_DAILY_LIMITS = [
+        'gemini-2.5-flash' => 20,
+        'gemini-2.5-flash-lite' => 20,
+        'gemini-3.1-flash-lite' => 500,
+    ];
 
-    protected string $model;
+    public const DEFAULT_DAILY_LIMIT = 20;
 
-    public function __construct()
+    public static function dailyLimitFor(string $model): int
     {
-        $this->apiKey = (string) config('services.gemini.key');
-        $this->model = (string) config('services.gemini.model', 'gemini-2.5-flash');
+        return self::MODEL_DAILY_LIMITS[$model] ?? self::DEFAULT_DAILY_LIMIT;
+    }
+
+    /**
+     * All configured Gemini API keys: the primary one (GEMINI_API_KEY) plus
+     * any extras from GEMINI_API_KEYS_EXTRA (comma-separated) — e.g. a second
+     * Google account's key added once the first one hits its daily quota.
+     *
+     * @return array<int, string>
+     */
+    public static function keyPool(): array
+    {
+        $primary = (string) config('services.gemini.key');
+        $extra = (string) config('services.gemini.extra_keys');
+
+        return collect([$primary])
+            ->merge(explode(',', $extra))
+            ->map(fn ($key) => trim($key))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Models to try, in priority order (GEMINI_MODEL_PRIORITY, comma-separated).
+     * Falls back to the single GEMINI_MODEL for backward compatibility if the
+     * priority list isn't configured.
+     *
+     * @return array<int, string>
+     */
+    public static function modelPriority(): array
+    {
+        $configured = (string) config('services.gemini.model_priority');
+
+        $list = collect(explode(',', $configured))
+            ->map(fn ($model) => trim($model))
+            ->filter()
+            ->values()
+            ->all();
+
+        if ($list !== []) {
+            return $list;
+        }
+
+        return [(string) config('services.gemini.model', 'gemini-2.5-flash')];
+    }
+
+    /**
+     * Total used / total capacity today across every (model, key) combo this
+     * app is configured to try — for the "Gemini hari ini: X/Y" nav badge.
+     *
+     * @return array{0: int, 1: int} [used, capacity]
+     */
+    public static function todayUsageSummary(): array
+    {
+        $pool = self::keyPool();
+        $models = self::modelPriority();
+        $keyCount = count($pool);
+
+        $used = 0;
+        $capacity = 0;
+
+        foreach ($models as $model) {
+            $used += GoogleApiKey::poolRequestsToday($pool, $model);
+            $capacity += self::dailyLimitFor($model) * $keyCount;
+        }
+
+        return [$used, $capacity];
+    }
+
+    /**
+     * Full (model, key) cascade in priority order: outer loop by model
+     * priority, inner loop by whichever key has the least usage logged today
+     * for that specific model. `generate()` walks this list in order and
+     * only gives up (throwing, which sends the caller to the OpenRouter
+     * fallback) once every combination has failed.
+     *
+     * @return array<int, array{0: string, 1: string}>
+     */
+    protected static function buildMatrix(): array
+    {
+        $pool = self::keyPool();
+        $matrix = [];
+
+        foreach (self::modelPriority() as $model) {
+            foreach (GoogleApiKey::sortKeysByUsage($pool, $model) as $apiKey) {
+                $matrix[] = [$model, $apiKey];
+            }
+        }
+
+        return $matrix;
     }
 
     /**
@@ -103,7 +208,7 @@ class GeminiService implements AiProvider
                     'data' => base64_encode($pdfBinary),
                 ],
             ],
-        ], $schema, timeoutSeconds: 300, retries: 1);
+        ], $schema, timeoutSeconds: 300, retries: 0);
     }
 
     protected function sentencesSchema(): array
@@ -134,17 +239,51 @@ class GeminiService implements AiProvider
     }
 
     /**
+     * Walks the (model, key) cascade in priority order (see buildMatrix()),
+     * trying each combination until one succeeds. Only throws — sending the
+     * caller (AiOrchestrator) on to the OpenRouter fallback — once every
+     * combination in the matrix has failed. Per-attempt retries default to 0
+     * since the matrix itself is the redundancy mechanism here: retrying the
+     * same failing (model, key) pair before moving to the next candidate
+     * would just multiply worst-case latency for no benefit.
+     *
      * @param  array<int, array<string, mixed>>  $parts
      */
-    protected function generate(array $parts, array $schema, int $timeoutSeconds = 120, int $retries = 1): array
+    protected function generate(array $parts, array $schema, int $timeoutSeconds = 120, int $retries = 0): array
     {
-        if (blank($this->apiKey)) {
-            throw new RuntimeException('GEMINI_API_KEY belum diset di .env');
+        $matrix = self::buildMatrix();
+
+        if ($matrix === []) {
+            throw new RuntimeException('Tidak ada GEMINI_API_KEY yang dikonfigurasi.');
         }
+
+        $lastError = null;
+
+        foreach ($matrix as [$model, $apiKey]) {
+            try {
+                return $this->attempt($parts, $schema, $model, $apiKey, $timeoutSeconds, $retries);
+            } catch (Throwable $e) {
+                $lastError = $e;
+                Log::warning('Kombinasi model/key Gemini gagal, coba kandidat berikutnya', [
+                    'model' => $model,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        throw new RuntimeException('Semua kombinasi model/key Gemini gagal. Error terakhir: '.$lastError?->getMessage());
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $parts
+     */
+    protected function attempt(array $parts, array $schema, string $model, string $apiKey, int $timeoutSeconds, int $retries): array
+    {
+        GoogleApiKey::recordUsage($apiKey, $model);
 
         $response = Http::timeout($timeoutSeconds)
             ->retry($retries, 2000)
-            ->post("https://generativelanguage.googleapis.com/v1beta/models/{$this->model}:generateContent?key={$this->apiKey}", [
+            ->post("https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}", [
                 'contents' => [
                     ['parts' => $parts],
                 ],
@@ -156,19 +295,19 @@ class GeminiService implements AiProvider
             ]);
 
         if ($response->failed()) {
-            throw new RuntimeException('Gemini API error: '.$response->body());
+            throw new RuntimeException("Gemini API error ({$model}): ".$response->body());
         }
 
         $text = data_get($response->json(), 'candidates.0.content.parts.0.text');
 
         if (blank($text)) {
-            throw new RuntimeException('Gemini tidak mengembalikan konten yang valid.');
+            throw new RuntimeException("Gemini ({$model}) tidak mengembalikan konten yang valid.");
         }
 
         $decoded = json_decode($text, true);
 
         if (json_last_error() !== JSON_ERROR_NONE || ! is_array($decoded)) {
-            throw new RuntimeException('Gagal parse JSON dari Gemini: '.json_last_error_msg());
+            throw new RuntimeException("Gagal parse JSON dari Gemini ({$model}): ".json_last_error_msg());
         }
 
         return $decoded;

@@ -20,7 +20,17 @@
             <a href="{{ route('books.index') }}" class="text-lg font-bold tracking-tight text-emerald-700">
                 Kitab<span class="text-neutral-800">AI</span>
             </a>
-            <span class="text-xs text-neutral-400">MVP v1.0</span>
+            <div class="flex items-center gap-3">
+                @php
+                    [$geminiUsed, $geminiCapacity] = \App\Services\GeminiService::todayUsageSummary();
+                    $geminiModels = \App\Services\GeminiService::modelPriority();
+                @endphp
+                <span class="rounded-full px-2.5 py-1 text-xs font-medium {{ $geminiUsed >= $geminiCapacity ? 'bg-red-100 text-red-700' : 'bg-neutral-100 text-neutral-500' }}"
+                    title="Perkiraan jumlah request ke Gemini hari ini (reset tiap tengah malam), gabungan {{ count(\App\Services\GeminiService::keyPool()) }} API key × model: {{ implode(', ', $geminiModels) }}">
+                    Gemini hari ini: {{ $geminiUsed }}/{{ $geminiCapacity }}
+                </span>
+                <span class="text-xs text-neutral-400">MVP v1.0</span>
+            </div>
         </div>
     </nav>
 

@@ -52,7 +52,13 @@ class ExtractBookPdfJob implements ShouldQueue
             $this->book->pages()->create([
                 'page_number' => $pageNumber,
                 'raw_text' => $pageText,
-                'extraction_method' => $extractor->needsVisionFallback($pageText) ? 'vision' : 'text',
+                // Default to vision for every page: this app's kitab content is
+                // Arabic, and text-mode extraction has proven unreliable enough
+                // on Arabic PDFs (broken/missing ToUnicode CMaps, reversed bidi
+                // runs) that it's no longer worth the heuristic's false negatives.
+                // Text-mode (splitIntoParagraphs / needsVisionFallback) is kept
+                // intact for a future "kitab teks biasa" (non-Arabic) mode.
+                'extraction_method' => 'vision',
             ]);
         }
 

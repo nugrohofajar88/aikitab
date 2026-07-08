@@ -13,6 +13,7 @@
         initialStatus: '{{ $book->status }}',
         initialProgress: {{ $book->progressPercentage() }},
         processedPages: {{ $book->pages->filter(fn ($p) => $p->paragraphs->isNotEmpty())->pluck('page_number')->values()->toJson() }},
+        activeTab: '{{ $book->paragraphs()->exists() ? 'hasil' : 'preview' }}',
     })" x-init="init()">
 
         <div class="mb-6 flex flex-wrap items-start justify-between gap-4">
@@ -25,7 +26,7 @@
                     <p class="mt-1 text-xs text-emerald-600">
                         Dipublikasikan {{ $book->published_at->diffForHumans() }}
                         @if (config('services.hosted.url'))
-                            &middot; <a href="{{ rtrim(config('services.hosted.url'), '/') }}/books/{{ $book->remote_book_id }}" target="_blank" class="underline hover:text-emerald-700">lihat di situs publik</a>
+                            &middot; <a href="{{ rtrim(config('services.hosted.url'), '/') }}/books/by-source/{{ $book->id }}" target="_blank" class="underline hover:text-emerald-700">lihat di situs publik</a>
                         @endif
                     </p>
                 @endif
@@ -85,6 +86,18 @@
 
         {{-- Step 1: preview PDF + choose page range, available once pages are parsed --}}
         @if (in_array($book->status, ['ready', 'processing', 'completed']))
+            @if ($book->paragraphs()->exists())
+                <div class="mb-6 flex gap-2 print:hidden">
+                    <button type="button" @click="activeTab = 'preview'"
+                        :class="activeTab === 'preview' ? 'bg-emerald-600 text-white' : 'bg-white text-neutral-600 border border-neutral-300'"
+                        class="rounded-full px-4 py-1.5 text-sm font-medium">Preview PDF</button>
+                    <button type="button" @click="activeTab = 'hasil'"
+                        :class="activeTab === 'hasil' ? 'bg-emerald-600 text-white' : 'bg-white text-neutral-600 border border-neutral-300'"
+                        class="rounded-full px-4 py-1.5 text-sm font-medium">Hasil Proses</button>
+                </div>
+            @endif
+
+            <div x-show="activeTab === 'preview'" x-cloak>
             <div class="mb-8 rounded-xl border border-neutral-200 bg-white p-5 print:hidden">
                 <div class="mb-4 flex items-center justify-between">
                     <h2 class="text-base font-semibold">Preview PDF</h2>
@@ -184,10 +197,12 @@
                     @endfor
                 </div>
             </div>
+            </div>
         @endif
 
         {{-- Step 2: rendered result of pages that have been processed --}}
         @if ($book->paragraphs()->exists())
+            <div x-show="activeTab === 'hasil'" x-cloak>
             <div class="mb-6 flex flex-wrap gap-2 print:hidden">
                 <button type="button" @click="mode = 'arab'"
                     :class="mode === 'arab' ? 'bg-emerald-600 text-white' : 'bg-white text-neutral-600 border border-neutral-300'"
@@ -201,6 +216,52 @@
                 <button type="button" @click="mode = 'lengkap'"
                     :class="mode === 'lengkap' ? 'bg-emerald-600 text-white' : 'bg-white text-neutral-600 border border-neutral-300'"
                     class="rounded-full px-4 py-1.5 text-sm font-medium">Lengkap</button>
+            </div>
+
+            <div class="mb-6 rounded-xl border border-neutral-200 bg-white p-5 print:hidden">
+                <div class="mb-4 flex items-center justify-between">
+                    <h2 class="text-base font-semibold">Daftar Halaman</h2>
+                    <div class="flex flex-wrap gap-3 text-[11px] text-neutral-500">
+                        <span class="flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-full bg-neutral-200"></span> Belum diproses</span>
+                        <span class="flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-full bg-amber-300"></span> Diproses</span>
+                        <span class="flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-full bg-emerald-400"></span> Selesai</span>
+                        <span class="flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-full bg-red-400"></span> Gagal</span>
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap gap-1.5">
+                    @for ($n = 1; $n <= $book->total_pages; $n++)
+                        @php
+                            $pageForIndex = $book->pages->firstWhere('page_number', $n);
+                            $pageState = $pageForIndex?->statusSummary() ?? 'empty';
+                            $badgeClasses = match ($pageState) {
+                                'done' => 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200',
+                                'processing' => 'bg-amber-100 text-amber-700 animate-pulse',
+                                'failed' => 'bg-red-100 text-red-700 hover:bg-red-200',
+                                default => 'bg-neutral-100 text-neutral-500 hover:bg-neutral-200',
+                            };
+                        @endphp
+
+                        @if (in_array($pageState, ['done', 'failed']))
+                            <button type="button" @click="goToPage({{ $n }})"
+                                :class="currentPage === {{ $n }} ? 'ring-2 ring-offset-1 ring-emerald-500' : ''"
+                                class="flex h-8 w-8 items-center justify-center rounded-md text-xs font-medium {{ $badgeClasses }}"
+                                title="Halaman {{ $n }} — lihat hasil">
+                                {{ $n }}
+                            </button>
+                        @elseif ($pageState === 'processing')
+                            <span class="flex h-8 w-8 items-center justify-center rounded-md text-xs font-medium {{ $badgeClasses }}"
+                                title="Halaman {{ $n }} — sedang diproses">
+                                {{ $n }}
+                            </span>
+                        @else
+                            <span class="flex h-8 w-8 items-center justify-center rounded-md text-xs font-medium {{ $badgeClasses }}"
+                                title="Halaman {{ $n }} — belum diproses">
+                                {{ $n }}
+                            </span>
+                        @endif
+                    @endfor
+                </div>
             </div>
 
             <div class="mb-4 flex items-center justify-between rounded-xl border border-neutral-200 bg-white px-4 py-2 print:hidden">
@@ -310,15 +371,17 @@
                     @endif
                 @endforeach
             </div>
+            </div>
         @endif
     </div>
 @endsection
 
 @push('scripts')
 <script>
-    function bookViewer({ statusUrl, initialStatus, initialProgress, processedPages }) {
+    function bookViewer({ statusUrl, initialStatus, initialProgress, processedPages, activeTab }) {
         return {
             mode: 'lengkap',
+            activeTab: activeTab ?? 'preview',
             status: initialStatus,
             progress: initialProgress,
             poller: null,
