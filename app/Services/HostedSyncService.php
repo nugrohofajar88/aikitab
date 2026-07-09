@@ -6,6 +6,7 @@ use App\Models\Book;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
+use Throwable;
 
 /**
  * Talks to the hosted (public, read-only) KitabAI instance: publishes
@@ -79,17 +80,28 @@ class HostedSyncService
      *
      * Rather than POSTing the whole book (which can be several MB of JSON for
      * a long kitab — every paragraph's harakat text, translation, and
-     * per-word grammar) as one HTTP body, the export is written to a file and
-     * pushed to the hosted server directly over FTPS (`hosted_ftp` disk),
-     * then a small API call just signals "a file is ready to import". This
-     * exists because a large single JSON POST was intermittently failing
-     * with "fwrite(): Unable to create temporary file" — Guzzle/PHP spill
-     * large request bodies to a temp file once they exceed an in-memory
-     * threshold, and that was failing under some (never fully pinned down)
-     * conditions. The hosted app's `books:process-imports` command (cron)
-     * picks up the file asynchronously — this method does not wait for the
-     * import to actually finish, only for the signal to be accepted, so the
-     * hosted `Book` may not exist yet the instant this returns.
+     * per-word grammar) as one HTTP body, the export is written to a local
+     * file and pushed to the hosted server directly over FTPS, then a small
+     * API call just signals "a file is ready to import". This exists because
+     * a large single JSON POST was intermittently failing with "fwrite():
+     * Unable to create temporary file" — Guzzle/PHP spill large request
+     * bodies to a temp file once they exceed an in-memory threshold, and that
+     * was failing under some (never fully pinned down) conditions.
+     *
+     * The FTPS transfer itself uses raw `ftp_*()` functions (`ftpUpload()`
+     * below), not `Storage::disk('hosted_ftp')` / Flysystem — Flysystem's
+     * FTP adapter converts the string payload into an in-memory stream
+     * before handing it to `ftp_fput()`, which hit the exact same "fwrite():
+     * Unable to create temporary file" failure once content got large
+     * enough to spill to disk. Writing to a real local file first (via the
+     * `local` disk, which has never had this problem anywhere else in this
+     * app) and uploading that file path directly via `ftp_put()` sidesteps
+     * the in-memory-stream step entirely.
+     *
+     * The hosted app's `books:process-imports` command (cron) picks the file
+     * up asynchronously — this method does not wait for the import to
+     * actually finish, only for the signal to be accepted, so the hosted
+     * `Book` may not exist yet the instant this returns.
      */
     public function publishBook(Book $book): void
     {
@@ -127,8 +139,15 @@ class HostedSyncService
         ];
 
         $filename = "book-{$book->id}-".now()->timestamp.'.json';
+        $localPath = "book-exports/{$filename}";
 
-        Storage::disk('hosted_ftp')->put($filename, json_encode($payload));
+        Storage::disk('local')->put($localPath, json_encode($payload));
+
+        try {
+            $this->ftpUpload(Storage::disk('local')->path($localPath), $filename);
+        } finally {
+            Storage::disk('local')->delete($localPath);
+        }
 
         $response = $this->client()->post("{$this->baseUrl}/api/sync/books/import-signal", [
             'source_local_id' => $book->id,
@@ -138,6 +157,54 @@ class HostedSyncService
 
         if (! $response->successful()) {
             throw new RuntimeException('Gagal mengirim sinyal impor: '.$response->body());
+        }
+    }
+
+    /**
+     * Uploads a local file to the hosted server's book-imports folder over
+     * FTPS, using raw `ftp_*()` functions — `ftp_put()` reads directly from
+     * the given local file path, no intermediate in-memory stream involved
+     * (unlike Flysystem's FTP adapter). See publishBook() for why that
+     * distinction matters here.
+     */
+    protected function ftpUpload(string $localFilePath, string $remoteFilename): void
+    {
+        $host = (string) config('services.hosted_ftp.host');
+        $username = (string) config('services.hosted_ftp.username');
+        $password = (string) config('services.hosted_ftp.password');
+        $port = (int) config('services.hosted_ftp.port', 21);
+        $root = rtrim((string) config('services.hosted_ftp.root'), '/');
+
+        if (blank($host) || blank($username)) {
+            throw new RuntimeException('HOSTED_FTP_* belum diset di .env');
+        }
+
+        $conn = @ftp_ssl_connect($host, $port, 15);
+
+        if (! $conn) {
+            throw new RuntimeException("Tidak bisa konek ke FTP host {$host}:{$port}.");
+        }
+
+        try {
+            if (! @ftp_login($conn, $username, $password)) {
+                throw new RuntimeException('Login FTP gagal — cek HOSTED_FTP_USERNAME/PASSWORD.');
+            }
+
+            ftp_pasv($conn, true);
+
+            $remotePath = $root.'/'.$remoteFilename;
+
+            if (! @ftp_put($conn, $remotePath, $localFilePath, FTP_BINARY)) {
+                throw new RuntimeException("Gagal upload file ke {$remotePath} lewat FTP.");
+            }
+        } finally {
+            try {
+                ftp_close($conn);
+            } catch (Throwable) {
+                // FTPS control-channel SSL shutdown sometimes warns on close
+                // ("SSL_read on shutdown: unexpected eof") — cosmetic, the
+                // upload itself already succeeded by this point.
+            }
         }
     }
 

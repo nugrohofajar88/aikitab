@@ -57,6 +57,18 @@ return [
         'token' => env('HOSTED_SYNC_TOKEN'),
     ],
 
+    // Raw FTPS credentials for HostedSyncService::ftpUpload() — deliberately
+    // not a Storage disk (see config/filesystems.php history / AGENTS.md):
+    // Flysystem's FTP adapter buffers writes through an in-memory stream that
+    // hit the same temp-file bug as the old single-JSON-POST publish did.
+    'hosted_ftp' => [
+        'host' => env('HOSTED_FTP_HOST'),
+        'username' => env('HOSTED_FTP_USERNAME'),
+        'password' => env('HOSTED_FTP_PASSWORD'),
+        'port' => (int) env('HOSTED_FTP_PORT', 21),
+        'root' => env('HOSTED_FTP_ROOT'),
+    ],
+
     'ghostscript' => [
         'binary' => env('GHOSTSCRIPT_BINARY', 'gs'),
     ],
