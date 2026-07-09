@@ -264,23 +264,23 @@
                 </div>
             </div>
 
-            <div class="mb-4 flex items-center justify-between rounded-xl border border-neutral-200 bg-white px-4 py-2 print:hidden">
+            <div class="mb-4 flex items-center justify-between gap-1 rounded-xl border border-neutral-200 bg-white px-2 py-2 sm:gap-0 sm:px-4 print:hidden">
                 <button type="button" @click="prevPage()" :disabled="!hasPrev()"
-                    class="rounded-lg px-3 py-1.5 text-sm font-medium text-neutral-600 hover:bg-neutral-100 disabled:opacity-30 disabled:hover:bg-transparent">
-                    &larr; Sebelumnya
+                    class="whitespace-nowrap rounded-lg px-2 py-1.5 text-sm font-medium text-neutral-600 hover:bg-neutral-100 disabled:opacity-30 disabled:hover:bg-transparent sm:px-3">
+                    &larr; <span class="hidden sm:inline">Sebelumnya</span>
                 </button>
-                <span class="text-sm font-medium text-neutral-700">Halaman <span x-text="currentPage"></span></span>
-                <div class="flex items-center gap-2">
+                <span class="whitespace-nowrap text-sm font-medium text-neutral-700">Halaman <span x-text="currentPage"></span></span>
+                <div class="flex items-center gap-1 sm:gap-2">
                     <button type="button" @click="window.print()" title="Print halaman ini"
-                        class="flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm font-medium text-neutral-600 hover:bg-neutral-100">
+                        class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm font-medium text-neutral-600 hover:bg-neutral-100 sm:px-3">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4">
                             <path fill-rule="evenodd" d="M5 2.75C5 1.784 5.784 1 6.75 1h6.5c.966 0 1.75.784 1.75 1.75v3.552c.377.046.752.097 1.126.153A2.212 2.212 0 0 1 18 8.653v4.097A2.25 2.25 0 0 1 15.75 15h-.241l.305 3.05a.75.75 0 0 1-.746.826H4.932a.75.75 0 0 1-.746-.826L4.491 15H4.25A2.25 2.25 0 0 1 2 12.75V8.653c0-1.082.784-2.005 1.874-2.198.374-.056.75-.107 1.126-.153V2.75Zm8.5 3.19V2.75a.25.25 0 0 0-.25-.25h-6.5a.25.25 0 0 0-.25.25v3.19a41.703 41.703 0 0 1 7 0ZM6.006 15l-.29 2.9h8.568l-.29-2.9H6.006Z" clip-rule="evenodd" />
                         </svg>
-                        Print
+                        <span class="hidden sm:inline">Print</span>
                     </button>
                     <button type="button" @click="nextPage()" :disabled="!hasNext()"
-                        class="rounded-lg px-3 py-1.5 text-sm font-medium text-neutral-600 hover:bg-neutral-100 disabled:opacity-30 disabled:hover:bg-transparent">
-                        Berikutnya &rarr;
+                        class="whitespace-nowrap rounded-lg px-2 py-1.5 text-sm font-medium text-neutral-600 hover:bg-neutral-100 disabled:opacity-30 disabled:hover:bg-transparent sm:px-3">
+                        <span class="hidden sm:inline">Berikutnya</span> &rarr;
                     </button>
                 </div>
             </div>

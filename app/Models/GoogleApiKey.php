@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Cache;
 use RuntimeException;
 
 class GoogleApiKey extends Model
@@ -100,5 +101,36 @@ class GoogleApiKey extends Model
             ->pluck('n_request', 'api_key');
 
         return collect($pool)->sortBy(fn (string $key) => $usage[$key] ?? 0)->values()->all();
+    }
+
+    /**
+     * Requests-per-minute tracking, kept separate from the daily `n_request`
+     * log above — Google enforces RPM and RPD as independent limits (seen on
+     * the AI Studio rate-limits dashboard: e.g. gemini-2.5-flash peaking at
+     * "8/5" RPM while its RPD was still well under cap), so a key/model pair
+     * with plenty of daily quota left can still get a 429 if too many
+     * requests land in the same 60-second window. Uses Cache (not the
+     * `google_api_keys` table) since this is high-frequency and
+     * self-expiring — no need to persist it or clutter the daily log.
+     */
+    public static function recentRequestCount(string $apiKey, string $model): int
+    {
+        return (int) Cache::get(self::rpmCacheKey($apiKey, $model), 0);
+    }
+
+    public static function recordRecentRequest(string $apiKey, string $model): void
+    {
+        $key = self::rpmCacheKey($apiKey, $model);
+        Cache::put($key, self::recentRequestCount($apiKey, $model) + 1, now()->addSeconds(65));
+    }
+
+    /**
+     * Bucketed by the current 60-second window (not a true sliding window —
+     * good enough for staying clear of RPM caps without the complexity of
+     * a real rate limiter).
+     */
+    protected static function rpmCacheKey(string $apiKey, string $model): string
+    {
+        return 'gemini_rpm:'.md5($apiKey).":{$model}:".intdiv(time(), 60);
     }
 }

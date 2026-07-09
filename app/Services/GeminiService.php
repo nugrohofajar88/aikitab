@@ -23,6 +23,7 @@ class GeminiService implements AiProvider
         'gemini-2.5-flash' => 20,
         'gemini-2.5-flash-lite' => 20,
         'gemini-3.1-flash-lite' => 500,
+        'gemini-3.5-flash' => 20,
     ];
 
     public const DEFAULT_DAILY_LIMIT = 20;
@@ -30,6 +31,28 @@ class GeminiService implements AiProvider
     public static function dailyLimitFor(string $model): int
     {
         return self::MODEL_DAILY_LIMITS[$model] ?? self::DEFAULT_DAILY_LIMIT;
+    }
+
+    /**
+     * Requests-per-minute limits per model, independent from the daily caps
+     * above — seen on the AI Studio rate-limits dashboard (e.g.
+     * gemini-2.5-flash peaking at "8/5" RPM while its RPD was still well
+     * under cap). Used by `buildMatrix()` to skip a (model, key) combo that's
+     * been hit too many times in the current 60-second window, even if it
+     * still has daily quota left.
+     */
+    public const MODEL_RPM_LIMITS = [
+        'gemini-2.5-flash' => 5,
+        'gemini-2.5-flash-lite' => 10,
+        'gemini-3.1-flash-lite' => 15,
+        'gemini-3.5-flash' => 5,
+    ];
+
+    public const DEFAULT_RPM_LIMIT = 5;
+
+    public static function rpmLimitFor(string $model): int
+    {
+        return self::MODEL_RPM_LIMITS[$model] ?? self::DEFAULT_RPM_LIMIT;
     }
 
     /**
@@ -107,6 +130,13 @@ class GeminiService implements AiProvider
      * only gives up (throwing, which sends the caller to the OpenRouter
      * fallback) once every combination has failed.
      *
+     * Combos already at their RPM cap for the current 60-second window are
+     * skipped — no point attempting one we know Google will 429 on right
+     * now when another combo has headroom. If literally every combo is
+     * RPM-capped (all caught up in a burst), falls back to the full
+     * unfiltered list rather than an empty matrix — better to try and get
+     * a real error than give up without attempting anything.
+     *
      * @return array<int, array{0: string, 1: string}>
      */
     protected static function buildMatrix(): array
@@ -120,7 +150,12 @@ class GeminiService implements AiProvider
             }
         }
 
-        return $matrix;
+        $underRpmCap = array_values(array_filter(
+            $matrix,
+            fn (array $pair) => GoogleApiKey::recentRequestCount($pair[1], $pair[0]) < self::rpmLimitFor($pair[0])
+        ));
+
+        return $underRpmCap !== [] ? $underRpmCap : $matrix;
     }
 
     /**
@@ -280,6 +315,7 @@ class GeminiService implements AiProvider
     protected function attempt(array $parts, array $schema, string $model, string $apiKey, int $timeoutSeconds, int $retries): array
     {
         GoogleApiKey::recordUsage($apiKey, $model);
+        GoogleApiKey::recordRecentRequest($apiKey, $model);
 
         $response = Http::timeout($timeoutSeconds)
             ->retry($retries, 2000)
